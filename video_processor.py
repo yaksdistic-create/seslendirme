@@ -1,5 +1,4 @@
 import os
-import tempfile
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, ImageClip, CompositeAudioClip
 import moviepy.video.fx.all as vfx
 from proglog import ProgressBarLogger
@@ -32,12 +31,15 @@ class UILogger(ProgressBarLogger):
                 print(f"> {self.current_action}: %{percent} tamamlandı.")
                 self.last_percent = percent
 
-def process_video(video_files, audio_input, output_file, transition_duration=1.0, transition_type="crossfade", bg_audio_volume=0.0):
+def process_video(video_files, audio_input, output_file, transition_duration=1.0, transition_type="crossfade", bg_audio_volume=0.0, sync_to_audio=True):
     """
-    Kısa videoları birleştirir, aralarına seçilen geçişi ekler ve 
+    Kısa videoları birleştirir, aralarına seçilen geçişi ekler ve
     ses dosyasını arka plan sesi olarak ayarlar.
     audio_input: Tek bir ses dosyası yolu (str) veya her video için ses yolları listesi (list)
     bg_audio_volume: Videolardaki orijinal arka plan sesinin seviyesi (0.0 = kapalı, 1.0 = tam ses)
+    sync_to_audio: True ise video süresi seslendirmeye göre ayarlanır (seslendirme
+        uzunsa son kare donar, kısaysa video kesilir). False ise videolar orijinal
+        süresinde kalır ve seslendirme üzerine bindirilir (taşarsa kırpılır).
     """
     if not video_files:
         raise ValueError("Lütfen en az bir video dosyası seçin.")
@@ -68,8 +70,7 @@ def process_video(video_files, audio_input, output_file, transition_duration=1.0
 
     # 2. Geçiş: Tüm kliplerin en yüksek çözünürlüğünü hedef al
     max_h = max(clip.size[1] for clip in clips)
-    max_w = max(clip.size[0] for clip in clips)
-    # En geniş boyuttaki kliple aynı en-boy oranını koruyarak hedef belirle
+    # En yüksek klible aynı en-boy oranını koruyarak hedef belirle
     ref_idx = next(i for i, c in enumerate(clips) if c.size[1] == max_h)
     target_w, target_h = clips[ref_idx].size
     target_fps = max(clip.fps or 30 for clip in clips)
@@ -83,55 +84,81 @@ def process_video(video_files, audio_input, output_file, transition_duration=1.0
             print(f"Video {i+1} boyutu {cw}x{ch} → {target_w}x{target_h} olarak ayarlandı.")
         
     voiceover_clips = []
+    single_voiceover = None
+    # Crossfade etkinse klipler üst üste bineceğinden, sahne başına seslendirmede
+    # konuşmanın sonunun kesilmesini önlemek için geçiş süresi kadar sessiz
+    # dondurma kuyruğu eklenir.
+    crossfade_active = (transition_duration > 0 and transition_type == "crossfade" and len(clips) > 1)
+
     if isinstance(audio_input, list):
         if len(audio_input) < len(clips):
             print("Uyarı: Ses dosyası sayısı video sayısından az, fazla videolar kullanılmayacak...")
             clips = clips[:len(audio_input)]
-            
-        print("Her sahne için videoların süreleri ses dosyalarına göre ayarlanıyor...")
+
+        if sync_to_audio:
+            print("Her sahne için videoların süreleri ses dosyalarına göre ayarlanıyor...")
+        else:
+            print("Videolar orijinal süresinde tutuluyor; seslendirme üzerine bindiriliyor...")
         for i in range(len(clips)):
             if i < len(audio_input) and audio_input[i] and os.path.exists(audio_input[i]):
                 voc = AudioFileClip(audio_input[i])
                 voiceover_clips.append(voc)
-                
-                target_duration = voc.duration
-                
-                if clips[i].duration < target_duration:
-                    last_frame = clips[i].get_frame(max(0, clips[i].duration - 0.05))
-                    freeze_clip = ImageClip(last_frame).set_duration(target_duration - clips[i].duration)
-                    freeze_clip.fps = clips[i].fps
-                    clips[i] = concatenate_videoclips([clips[i], freeze_clip], method="compose")
+
+                if sync_to_audio:
+                    # Video süresini seslendirmeye eşitle (dondur / kırp).
+                    # Konuşma süresi + (crossfade için) geçiş payı kadar sessiz kuyruk.
+                    # Son klibe kuyruk eklenmez (sonrasında geçiş yok).
+                    extra = transition_duration if (crossfade_active and i < len(clips) - 1) else 0.0
+                    target_duration = voc.duration + extra
+
+                    if clips[i].duration < target_duration:
+                        last_frame = clips[i].get_frame(max(0, clips[i].duration - 0.05))
+                        freeze_clip = ImageClip(last_frame).set_duration(target_duration - clips[i].duration)
+                        freeze_clip.fps = clips[i].fps
+                        clips[i] = concatenate_videoclips([clips[i], freeze_clip], method="compose")
+                    else:
+                        clips[i] = clips[i].subclip(0, target_duration)
+                    audio_for_clip = voc
                 else:
-                    clips[i] = clips[i].subclip(0, target_duration)
-                
+                    # Süre ayarlanmıyor: video orijinal kalır. Seslendirme klip
+                    # süresini aşarsa kırpılır (videoyu uzatmayız), kısaysa kalan
+                    # kısım sessiz kalır.
+                    if voc.duration > clips[i].duration:
+                        audio_for_clip = voc.subclip(0, clips[i].duration)
+                    else:
+                        audio_for_clip = voc
+
                 # Orijinal arka plan sesini voiceover ile karıştır
                 if bg_audio_volume > 0.0 and clips[i].audio is not None:
                     bg = clips[i].audio.volumex(bg_audio_volume)
-                    mixed = CompositeAudioClip([bg, voc])
+                    mixed = CompositeAudioClip([bg, audio_for_clip])
                     clips[i] = clips[i].set_audio(mixed)
                 else:
-                    clips[i] = clips[i].set_audio(voc)
-                
+                    clips[i] = clips[i].set_audio(audio_for_clip)
+
     elif isinstance(audio_input, str) and os.path.exists(audio_input):
-        print("Tek parça ses dosyası bulundu. Videolar hedef ses süresine göre ayarlanıyor...")
         single_voiceover = AudioFileClip(audio_input)
-        target_total_duration = single_voiceover.duration
-        
-        N = len(clips)
-        if transition_duration > 0 and N > 1 and transition_type == "crossfade":
-            target_clip_duration = (target_total_duration + (N - 1) * transition_duration) / N
-        else:
-            target_clip_duration = target_total_duration / N
-            
-        for i in range(N):
-            if clips[i].duration < target_clip_duration:
-                last_frame = clips[i].get_frame(max(0, clips[i].duration - 0.05))
-                freeze_clip = ImageClip(last_frame).set_duration(target_clip_duration - clips[i].duration)
-                freeze_clip.fps = clips[i].fps
-                clips[i] = concatenate_videoclips([clips[i], freeze_clip], method="compose")
+        if sync_to_audio:
+            print("Tek parça ses dosyası bulundu. Videolar hedef ses süresine göre ayarlanıyor...")
+            target_total_duration = single_voiceover.duration
+
+            N = len(clips)
+            if transition_duration > 0 and N > 1 and transition_type == "crossfade":
+                target_clip_duration = (target_total_duration + (N - 1) * transition_duration) / N
             else:
-                clips[i] = clips[i].subclip(0, target_clip_duration)
-                
+                target_clip_duration = target_total_duration / N
+
+            for i in range(N):
+                if clips[i].duration < target_clip_duration:
+                    last_frame = clips[i].get_frame(max(0, clips[i].duration - 0.05))
+                    freeze_clip = ImageClip(last_frame).set_duration(target_clip_duration - clips[i].duration)
+                    freeze_clip.fps = clips[i].fps
+                    clips[i] = concatenate_videoclips([clips[i], freeze_clip], method="compose")
+                else:
+                    clips[i] = clips[i].subclip(0, target_clip_duration)
+        else:
+            print("Tek parça ses dosyası bulundu. Videolar orijinal süresinde tutuluyor; ses üzerine bindiriliyor...")
+
     print(f"Videolar birleştiriliyor. Geçiş Türü: {transition_type}...")
     
     if transition_duration > 0 and len(clips) > 1:
@@ -157,27 +184,34 @@ def process_video(video_files, audio_input, output_file, transition_duration=1.0
     else:
         final_video = concatenate_videoclips(clips, method="compose")
         
-    single_voiceover = None
-    if isinstance(audio_input, str) and os.path.exists(audio_input):
+    if single_voiceover is not None:
         print("Tek parça ses dosyası tüm videoya ekleniyor...")
-        single_voiceover = AudioFileClip(audio_input)
+        # single_voiceover yukarıda zaten açıldı; tekrar açmıyoruz (handle sızıntısını önler).
+        # Süre eşitleme kapalıysa ve ses videodan uzunsa, videoyu uzatmamak için
+        # sesi video süresine kırp.
+        voiceover_for_final = single_voiceover
+        if not sync_to_audio and single_voiceover.duration > final_video.duration:
+            voiceover_for_final = single_voiceover.subclip(0, final_video.duration)
         # Orijinal arka plan sesini tek parça ses ile karıştır
         if bg_audio_volume > 0.0 and final_video.audio is not None:
             bg = final_video.audio.volumex(bg_audio_volume)
-            mixed = CompositeAudioClip([bg, single_voiceover])
+            mixed = CompositeAudioClip([bg, voiceover_for_final])
             final_video = final_video.set_audio(mixed)
         else:
-            final_video = final_video.set_audio(single_voiceover)
-        
-    # MoviePy crossfade duration bug fix
-    if final_video.audio:
+            final_video = final_video.set_audio(voiceover_for_final)
+
+    # MoviePy crossfade süre düzeltmesi: yalnızca süre eşitleme açıkken videoyu
+    # ses süresine sabitle. Kapalıyken videolar orijinal süresinde kalmalı.
+    if sync_to_audio and final_video.audio:
         final_video = final_video.set_duration(final_video.audio.duration)
 
     print("Çıktı video oluşturuluyor (Bu işlem biraz zaman alabilir)...")
     
     logger = UILogger()
-    # Geçici ses dosyasını çıktı videosunun bulunduğu klasöre kaydet
-    output_dir = os.path.dirname(output_file)
+    # Geçici ses dosyasını çıktı videosunun bulunduğu klasöre kaydet.
+    # dirname boş dönerse (yol klasör içermiyorsa) çalışma dizinine düş; aksi
+    # halde os.chdir("") FileNotFoundError fırlatır.
+    output_dir = os.path.dirname(output_file) or os.getcwd()
     temp_audio_path = os.path.join(output_dir, f"temp_audio_{os.path.basename(output_file)}.m4a")
     
     # MoviePy geçici dosyalarının masaüstüne gitmemesi için çalışma dizinini çıktı klasörüne al

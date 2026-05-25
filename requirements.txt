@@ -1,3 +1,17 @@
+# --- Çekirdek video/ses işleme ---
 moviepy==1.0.3
 edge-tts==6.1.12
-pygame==2.5.2
+Pillow>=9.5.0
+imageio-ffmpeg>=0.4.9
+
+# --- Ses klonlama (Coqui XTTS v2 - lokal yapay zeka) ---
+# Not: Bu paketler büyüktür (~2GB+). "Kendi Sesimi Klonla" özelliği için gereklidir.
+TTS==0.22.0
+# torch/torchaudio 2.5.1'e sabit: yeni torchaudio surumleri ses okumayi ayri
+# 'torchcodec' paketine (+ sistem FFmpeg) devrediyor ve Windows'ta hata veriyor.
+# 2.5.1 soundfile tabanlidir ve PyTorch 2.6'daki weights_only sorununu da onler.
+torch==2.5.1
+torchaudio==2.5.1
+# XTTS yalnizca transformers 4.40.2 ile uyumludur. Daha yeni surumler
+# 'BeamSearchScorer' importunu kaldirdigi icin hata verir; bu yuzden sabit.
+transformers==4.40.2
