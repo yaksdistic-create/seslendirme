@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# PyInstaller
+# Eğer spec dosyalarını saklamak istemiyorsanız yoruma açabilirsiniz.
+# *.spec
+
+# PyInstaller geçici veya derleme çıktı klasörleri
+build/
+dist/
+
+# Geçici Ses ve Video Dosyaları (Proje çalışırken oluşan geçici dosyalar)
+temp_voiceover_*.mp3
+temp_voiceover_*.wav
+temp_voiceover_single.mp3
+temp_voiceover_single.wav
+sonuc_video.mp4
+*.mp4
+*.mp3
+*.wav
+
+# IDE'ler ve Editörler
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# İşletim Sistemi Dosyaları
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
